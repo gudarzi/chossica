@@ -322,7 +322,7 @@ async def main() -> None:
                     file_name=file_name,
                 )
                 file_inline = (
-                    dict(uploaded) if isinstance(uploaded, dict) else uploaded.to_dict()
+                    dict(uploaded) if isinstance(uploaded, dict) else uploaded.to_dict
                 )
                 await client.send_message(
                     object_guid=my_guid,
