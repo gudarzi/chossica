@@ -43,6 +43,9 @@ if LOG_LEVEL != "DEBUG":
 SESSION_NAME     = "rubika.session"
 PRIVATE_KEY_FILE = Path(f"{SESSION_NAME}.key")   # our own sidecar – rubpy never touches this
 
+MAX_RETRIES = 5
+RETRY_DELAY = 3
+
 
 # ─────────────────────────────────────────────
 # Phone normalisation
@@ -257,7 +260,41 @@ async def fresh_login() -> Client:
 # ─────────────────────────────────────────────
 # Upload helpers
 # ─────────────────────────────────────────────
-async def upload_progress_callback(current: int, total: int) -> None:
+def build_file_inline(uploaded: dict) -> dict:
+    """
+    Normalize Rubika file payload.
+
+    Rubika randomly rejects raw upload payloads with:
+    INVALID_INPUT
+    """
+
+    payload = dict(uploaded)
+
+    # ALWAYS send as generic file
+    payload.update(
+        {
+            "type": "File",
+            "time": 1,
+            "width": 0,
+            "height": 0,
+            "music_performer": "",
+            "is_spoil": False,
+        }
+    )
+
+    # Remove problematic None keys/values
+    cleaned = {}
+
+    for k, v in payload.items():
+        if k is None or v is None:
+            continue
+
+        cleaned[str(k)] = v
+
+    return cleaned
+
+
+async def upload_progress_callback(total: int, current: int) -> None:
     if total == 0:
         return
     percent    = current / total * 100
@@ -321,15 +358,43 @@ async def main() -> None:
                     callback=upload_progress_callback,
                     file_name=file_name,
                 )
+
                 file_inline = (
-                    dict(uploaded) if isinstance(uploaded, dict) else uploaded.to_dict
+                    dict(uploaded)
+                    if isinstance(uploaded, dict)
+                    else uploaded.to_dict
                 )
-                await client.send_message(
-                    object_guid=my_guid,
-                    file_inline=file_inline,
-                    message=None,
-                )
+
+                file_inline = build_file_inline(file_inline)
+
+                last_error = None
+
+                for attempt in range(1, MAX_RETRIES + 1):
+                    try:
+                        await client.send_message(
+                            object_guid=my_guid,
+                            file_inline=file_inline,
+                            text="",
+                        )
+                        break
+
+                    except Exception as exc:
+                        last_error = exc
+
+                        log.warning(
+                            "Finalize attempt %s/%s failed: %s",
+                            attempt,
+                            MAX_RETRIES,
+                            exc,
+                        )
+
+                        if attempt >= MAX_RETRIES:
+                            raise
+
+                        await asyncio.sleep(RETRY_DELAY * attempt)
+
                 print(f"✅ '{file_name}' sent to Saved Messages!\n")
+
             except Exception as exc:
                 log.error("Upload error (%s): %s", type(exc).__name__, exc)
                 print(f"\n❌ Upload error: {exc}\n")
