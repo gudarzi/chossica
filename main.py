@@ -262,37 +262,28 @@ async def fresh_login() -> Client:
 # ─────────────────────────────────────────────
 def build_file_inline(uploaded: dict) -> dict:
     """
-    Normalize Rubika file payload.
-
-    Rubika randomly rejects raw upload payloads with:
-    INVALID_INPUT
+    Normalize Rubika file payload while preserving
+    Rubika-required upload metadata.
     """
 
     payload = dict(uploaded)
 
-    # ALWAYS send as generic file
-    payload.update(
-        {
-            "type": "File",
-            "time": 1,
-            "width": 0,
-            "height": 0,
-            "music_performer": "",
-            "is_spoil": False,
-        }
-    )
+    # ONLY force generic file type
+    payload["type"] = "File"
 
-    # Remove problematic None keys/values
+    # Remove invalid None keys only
     cleaned = {}
 
     for k, v in payload.items():
-        if k is None or v is None:
+        if k is None:
+            continue
+
+        if v is None:
             continue
 
         cleaned[str(k)] = v
 
     return cleaned
-
 
 async def upload_progress_callback(total: int, current: int) -> None:
     if total == 0:
@@ -374,7 +365,7 @@ async def main() -> None:
                         await client.send_message(
                             object_guid=my_guid,
                             file_inline=file_inline,
-                            text="",
+                            text="aaaa",
                         )
                         break
 
