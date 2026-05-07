@@ -24,3 +24,10 @@ pip install --upgrade pip
 
 # Install the dependency
 pip install -r requirements.txt
+
+# Restore the old session
+# unzip my_session.zip
+# put its contents beside main.py
+
+# Run the app
+python main.py
