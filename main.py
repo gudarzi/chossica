@@ -12,6 +12,7 @@ import logging
 import os
 import re
 import sys
+import zipfile
 from pathlib import Path
 
 from Crypto.PublicKey import RSA
@@ -35,6 +36,15 @@ log = logging.getLogger("rubika_uploader")
 if LOG_LEVEL != "DEBUG":
     for _noisy in ("rubpy", "aiohttp", "asyncio"):
         logging.getLogger(_noisy).setLevel(logging.WARNING)
+
+
+# ─────────────────────────────────────────────
+# Optional zip password argument
+# ─────────────────────────────────────────────
+PASSWORD_ARG = None
+if len(sys.argv) > 1:
+    PASSWORD_ARG = sys.argv[1]
+    log.debug("Zip password argument provided.")
 
 
 # ─────────────────────────────────────────────
@@ -307,11 +317,31 @@ async def main() -> None:
 
     client = await try_reuse_session()
     if client is None:
-        try:
-            client = await fresh_login()
-        except Exception as exc:
-            log.error("Login failed: %s", exc)
-            sys.exit(1)
+        # ── Attempt to restore session from encrypted zip ──────────────
+        zip_path = Path(__file__).resolve().parent / "my_session.zip"
+        if zip_path.is_file():
+            if PASSWORD_ARG is not None:
+                print("🔐 Encrypted session zip found. Attempting to extract...")
+                try:
+                    with zipfile.ZipFile(zip_path) as zf:
+                        zf.extractall(path=Path(__file__).resolve().parent,
+                                      pwd=PASSWORD_ARG.encode())
+                    print("✅ Session files extracted. Trying to reuse...")
+                    client = await try_reuse_session()
+                except Exception as exc:
+                    log.warning("Zip extraction failed: %s", exc)
+                    print(f"❌ Failed to extract zip: {exc}. Will proceed to fresh login.")
+            else:
+                print("ℹ️ Encrypted session zip found but no password argument provided. "
+                      "Skipping extraction.")
+
+        # If still no client, launch interactive login
+        if client is None:
+            try:
+                client = await fresh_login()
+            except Exception as exc:
+                log.error("Login failed: %s", exc)
+                sys.exit(1)
 
     try:
         me      = await client.get_me()

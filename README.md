@@ -1,9 +1,4 @@
-# Rubika File Uploader (Single‑file)
-
-An interactive script that uploads any file from your local machine directly to your Rubika **Saved Messages**.  
-It handles authentication once and then lets you drop files continuously with a live progress bar.
-
----
+# My Custom Uploader
 
 ## 🔧 Setup (Virtual Environment)
 
@@ -28,6 +23,7 @@ pip install -r requirements.txt
 # Restore the old session
 # unzip my_session.zip
 # put its contents beside main.py
+# or just provide the session password to the app as an argument
 
 # Run the app
 python main.py
