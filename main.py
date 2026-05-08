@@ -16,6 +16,7 @@ import logging
 import os
 import re
 import sys
+import time
 import zipfile
 from pathlib import Path
 
@@ -314,16 +315,29 @@ def build_file_inline(uploaded: dict) -> dict:
     return cleaned
 
 
-async def upload_progress_callback(total: int, current: int) -> None:
-    if total == 0:
-        return
-    percent    = current / total * 100
-    bar_length = 40
-    filled     = int(bar_length * current // total)
-    bar        = "█" * filled + "-" * (bar_length - filled)
-    print(f"\r📤 Uploading: |{bar}| {percent:.1f}% ", end="", flush=True)
-    if current >= total:
-        print()
+def _format_speed(bytes_per_second: float) -> str:
+    """Pretty-print transfer speed."""
+    if bytes_per_second < 1024:
+        return f"{bytes_per_second:.1f} B/s"
+    elif bytes_per_second < 1024 * 1024:
+        return f"{bytes_per_second / 1024:.1f} KB/s"
+    elif bytes_per_second < 1024 * 1024 * 1024:
+        return f"{bytes_per_second / (1024 * 1024):.1f} MB/s"
+    else:
+        return f"{bytes_per_second / (1024 * 1024 * 1024):.1f} GB/s"
+
+
+def _format_duration(seconds: float) -> str:
+    """Format seconds into M:SS or H:MM:SS."""
+    if seconds < 0:
+        seconds = 0.0
+    seconds = int(seconds)
+    hours, remainder = divmod(seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours > 0:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    else:
+        return f"{minutes}:{secs:02d}"
 
 
 async def upload_single_file(client: Client, path: Path, my_guid: str) -> None:
@@ -333,9 +347,40 @@ async def upload_single_file(client: Client, path: Path, my_guid: str) -> None:
     print(f"📄 {file_name}  ({file_size / (1024 * 1024):.2f} MB)")
 
     print("⏳ Starting upload...")
+
+    # Timing state for the progress callback
+    start_time = time.monotonic()
+
+    async def progress_callback(total: int, current: int) -> None:
+        """Progress callback with speed / ETA."""
+        if total == 0:
+            return
+        now = time.monotonic()
+        elapsed = now - start_time
+        percent = current / total * 100
+
+        # Average speed (overall)
+        speed = current / elapsed if elapsed > 0 else 0
+        eta = (total - current) / speed if speed > 0 else 0
+
+        bar_length = 40
+        filled = int(bar_length * current // total)
+        bar = "█" * filled + "-" * (bar_length - filled)
+
+        line = (
+            f"\r📤 Uploading: |{bar}| {percent:.1f}%  "
+            f"⚡{_format_speed(speed)}  "
+            f"⏱ elapsed {_format_duration(elapsed)}  "
+            f"⏳ ETA {_format_duration(eta)}   "
+        )
+        print(line, end="", flush=True)
+
+        if current >= total:
+            print()  # move to new line after completion
+
     uploaded = await client.upload(
         str(path),
-        callback=upload_progress_callback,
+        callback=progress_callback,
         file_name=file_name,
     )
 
