@@ -3,10 +3,14 @@
 Interactive Rubika File Uploader
 Uploads any file to your Rubika "Saved Messages" with a progress bar.
 Reuses an existing session when possible.
+
+Usage:
+    python main.py [--password ZIP_PASSWORD] [file1 file2 ...]
 """
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import logging
 import os
@@ -39,12 +43,26 @@ if LOG_LEVEL != "DEBUG":
 
 
 # ─────────────────────────────────────────────
-# Optional zip password argument
+# Argument parsing
 # ─────────────────────────────────────────────
-PASSWORD_ARG = None
-if len(sys.argv) > 1:
-    PASSWORD_ARG = sys.argv[1]
-    log.debug("Zip password argument provided.")
+parser = argparse.ArgumentParser(
+    description="Upload files to Rubika Saved Messages. "
+                "If file paths are given, runs non-interactively."
+)
+parser.add_argument(
+    "--password", "-p",
+    help="Password for the encrypted session zip (my_session.zip).",
+    default=None,
+)
+parser.add_argument(
+    "files",
+    nargs="*",
+    help="One or more file paths to upload non-interactively.",
+)
+args = parser.parse_args()
+
+ZIP_PASSWORD = args.password
+NONINTERACTIVE_FILES = [Path(f).resolve() for f in args.files if f.strip()] if args.files else []
 
 
 # ─────────────────────────────────────────────
@@ -295,6 +313,7 @@ def build_file_inline(uploaded: dict) -> dict:
 
     return cleaned
 
+
 async def upload_progress_callback(total: int, current: int) -> None:
     if total == 0:
         return
@@ -305,6 +324,50 @@ async def upload_progress_callback(total: int, current: int) -> None:
     print(f"\r📤 Uploading: |{bar}| {percent:.1f}% ", end="", flush=True)
     if current >= total:
         print()
+
+
+async def upload_single_file(client: Client, path: Path, my_guid: str) -> None:
+    """Upload one file and send it to Saved Messages."""
+    file_name = path.name
+    file_size = path.stat().st_size
+    print(f"📄 {file_name}  ({file_size / (1024 * 1024):.2f} MB)")
+
+    print("⏳ Starting upload...")
+    uploaded = await client.upload(
+        str(path),
+        callback=upload_progress_callback,
+        file_name=file_name,
+    )
+
+    file_inline = (
+        dict(uploaded)
+        if isinstance(uploaded, dict)
+        else uploaded.to_dict
+    )
+    file_inline = build_file_inline(file_inline)
+
+    last_error = None
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            await client.send_message(
+                object_guid=my_guid,
+                file_inline=file_inline,
+                text="aaaa",
+            )
+            break
+        except Exception as exc:
+            last_error = exc
+            log.warning(
+                "Finalize attempt %s/%s failed: %s",
+                attempt,
+                MAX_RETRIES,
+                exc,
+            )
+            if attempt >= MAX_RETRIES:
+                raise
+            await asyncio.sleep(RETRY_DELAY * attempt)
+
+    print(f"✅ '{file_name}' sent to Saved Messages!\n")
 
 
 # ─────────────────────────────────────────────
@@ -320,12 +383,12 @@ async def main() -> None:
         # ── Attempt to restore session from encrypted zip ──────────────
         zip_path = Path(__file__).resolve().parent / "my_session.zip"
         if zip_path.is_file():
-            if PASSWORD_ARG is not None:
+            if ZIP_PASSWORD is not None:
                 print("🔐 Encrypted session zip found. Attempting to extract...")
                 try:
                     with zipfile.ZipFile(zip_path) as zf:
                         zf.extractall(path=Path(__file__).resolve().parent,
-                                      pwd=PASSWORD_ARG.encode())
+                                      pwd=ZIP_PASSWORD.encode())
                     print("✅ Session files extracted. Trying to reuse...")
                     client = await try_reuse_session()
                 except Exception as exc:
@@ -350,6 +413,18 @@ async def main() -> None:
         print(f"👤 Logged in as : {name}")
         print(f"📌 Saved Messages GUID: {my_guid}\n")
 
+        # ── Non‑interactive mode (files passed as arguments) ──────────
+        if NONINTERACTIVE_FILES:
+            print(f"📤 Non-interactive mode: uploading {len(NONINTERACTIVE_FILES)} file(s)...\n")
+            for file_path in NONINTERACTIVE_FILES:
+                if not file_path.is_file():
+                    print(f"❌ File not found: {file_path} - skipping.")
+                    continue
+                await upload_single_file(client, file_path, my_guid)
+            print("🎉 All uploads complete. Exiting.")
+            return
+
+        # ── Interactive mode ──────────────────────────────────────────
         while True:
             print("-" * 52)
             path_str = (
@@ -368,57 +443,7 @@ async def main() -> None:
                 print(f"❌ File not found: {path_str}\n")
                 continue
 
-            file_name = os.path.basename(path_str)
-            file_size = os.path.getsize(path_str)
-            print(f"📄 {file_name}  ({file_size / (1024 * 1024):.2f} MB)")
-
-            try:
-                print("⏳ Starting upload...")
-                uploaded = await client.upload(
-                    path_str,
-                    callback=upload_progress_callback,
-                    file_name=file_name,
-                )
-
-                file_inline = (
-                    dict(uploaded)
-                    if isinstance(uploaded, dict)
-                    else uploaded.to_dict
-                )
-
-                file_inline = build_file_inline(file_inline)
-
-                last_error = None
-
-                for attempt in range(1, MAX_RETRIES + 1):
-                    try:
-                        await client.send_message(
-                            object_guid=my_guid,
-                            file_inline=file_inline,
-                            text="aaaa",
-                        )
-                        break
-
-                    except Exception as exc:
-                        last_error = exc
-
-                        log.warning(
-                            "Finalize attempt %s/%s failed: %s",
-                            attempt,
-                            MAX_RETRIES,
-                            exc,
-                        )
-
-                        if attempt >= MAX_RETRIES:
-                            raise
-
-                        await asyncio.sleep(RETRY_DELAY * attempt)
-
-                print(f"✅ '{file_name}' sent to Saved Messages!\n")
-
-            except Exception as exc:
-                log.error("Upload error (%s): %s", type(exc).__name__, exc)
-                print(f"\n❌ Upload error: {exc}\n")
+            await upload_single_file(client, Path(path_str).resolve(), my_guid)
 
     finally:
         try:
